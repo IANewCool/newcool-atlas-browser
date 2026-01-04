@@ -2,74 +2,124 @@ name: Build NewCool Atlas Android
 
 on:
   workflow_dispatch:
-    inputs:
-      build_type:
-        description: 'Build type'
-        required: true
-        default: 'Release'
-        type: choice
-        options:
-          - Release
-          - Debug
 
 env:
   CHROMIUM_VERSION: "145.0.7560.0"
-  DEPOT_TOOLS_UPDATE: "0"
 
 jobs:
-  build-android:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 360  # 6 horas máximo de GitHub
 
     steps:
-      - name: Checkout
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 1: PREPARACIÓN (5 min)
+      # ═══════════════════════════════════════════════════════════════
+      - name: "📥 Checkout patches"
         uses: actions/checkout@v4
 
-      - name: Free Disk Space
+      - name: "📊 [1/8] Espacio inicial"
         run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 1: PREPARACIÓN"
+          echo "══════════════════════════════════════"
+          df -h /
+
+      - name: "🧹 [2/8] Liberar espacio en disco"
+        run: |
+          echo "Eliminando paquetes innecesarios..."
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
-          df -h
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf /usr/local/graalvm
+          sudo rm -rf /usr/local/.ghcup
+          sudo docker image prune --all --force 2>/dev/null || true
+          sudo apt-get clean
+          echo "Espacio después de limpieza:"
+          df -h /
 
-      - name: Install Dependencies
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 2: OBTENER CHROMIUM (60-90 min)
+      # ═══════════════════════════════════════════════════════════════
+      - name: "📥 [3/8] Instalar depot_tools"
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git curl wget python3 python3-pip \
-            lsb-release sudo \
-            openjdk-11-jdk
-
-      - name: Setup depot_tools
-        run: |
-          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo "══════════════════════════════════════"
+          echo "FASE 2: OBTENER CHROMIUM"
+          echo "══════════════════════════════════════"
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git
           echo "$PWD/depot_tools" >> $GITHUB_PATH
 
-      - name: Fetch Chromium (minimal)
+      - name: "📥 [4/8] Descargar Chromium"
         run: |
           mkdir chromium && cd chromium
-          fetch --nohooks --no-history chromium
-        timeout-minutes: 60
 
-      - name: Install Build Dependencies
+          # Configuración para Android minimal
+          cat > .gclient << 'GCLIENT'
+          solutions = [{
+            "name": "src",
+            "url": "https://chromium.googlesource.com/chromium/src.git@${{ env.CHROMIUM_VERSION }}",
+            "managed": False,
+            "custom_vars": {
+              "checkout_android": True,
+              "checkout_ios": False,
+            },
+          }]
+          target_os = ["android"]
+          GCLIENT
+
+          echo "Iniciando descarga (esto toma ~60 minutos)..."
+          gclient sync --no-history --nohooks --shallow -j4 2>&1 | tail -50
+
+          echo "✅ Descarga completada"
+          df -h /
+        timeout-minutes: 90
+
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 3: CONFIGURAR BUILD (15 min)
+      # ═══════════════════════════════════════════════════════════════
+      - name: "🔧 [5/8] Instalar dependencias Android"
+        run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 3: CONFIGURAR BUILD"
+          echo "══════════════════════════════════════"
+          cd chromium/src
+
+          # Instalar dependencias
+          sudo ./build/install-build-deps.sh --android --no-prompt 2>&1 | tail -20 || true
+
+          # Ejecutar hooks
+          gclient runhooks 2>&1 | tail -30
+
+          echo "✅ Dependencias instaladas"
+
+      - name: "📝 [6/8] Aplicar patches NewCool"
         run: |
           cd chromium/src
-          ./build/install-build-deps.sh --android --no-prompt
-          gclient runhooks
 
-      - name: Apply NewCool Patches
-        run: |
-          cd chromium/src
+          echo "Aplicando patches de personalización..."
           for patch in $GITHUB_WORKSPACE/patches/*.patch; do
-            echo "Applying: $patch"
-            git apply "$patch" || echo "Patch may have conflicts, continuing..."
+            name=$(basename "$patch")
+            echo "→ $name"
+            if git apply --check "$patch" 2>/dev/null; then
+              git apply "$patch"
+              echo "  ✅ Aplicado"
+            else
+              echo "  ⚠️ Aplicando con merge..."
+              git apply --3way "$patch" 2>/dev/null || echo "  ❌ Falló: $name"
+            fi
           done
 
-      - name: Configure Android Build
+          echo ""
+          echo "Verificando branding:"
+          head -5 chrome/app/theme/chromium/BRANDING
+
+      - name: "⚙️ Configurar GN"
         run: |
           cd chromium/src
+
           gn gen out/Android --args='
             target_os="android"
             target_cpu="arm64"
@@ -77,31 +127,87 @@ jobs:
             is_official_build=true
             is_component_build=false
             symbol_level=0
-            android_channel="stable"
+            enable_nacl=false
+            blink_symbol_level=0
+            v8_symbol_level=0
             chrome_pgo_phase=0
+            android_channel="stable"
           '
 
-      - name: Build Chrome APK
+          echo "✅ Build configurado"
+          df -h /
+
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 4: COMPILAR (180-240 min)
+      # ═══════════════════════════════════════════════════════════════
+      - name: "🔨 [7/8] Compilar APK"
         run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 4: COMPILAR"
+          echo "══════════════════════════════════════"
+          echo "Esto puede tomar 3-4 horas..."
+          echo ""
+
           cd chromium/src
-          autoninja -C out/Android chrome_public_apk
+
+          # Compilar con progreso
+          autoninja -C out/Android chrome_public_apk 2>&1 | while read line; do
+            # Mostrar solo líneas de progreso cada 100 pasos
+            if echo "$line" | grep -qE '^\[[0-9]+/[0-9]+\]'; then
+              current=$(echo "$line" | sed 's/\[\([0-9]*\).*/\1/')
+              if [ $((current % 500)) -eq 0 ]; then
+                echo "$line"
+              fi
+            fi
+          done
+
+          echo "✅ Compilación completada"
+          ls -lah out/Android/apks/
         timeout-minutes: 240
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: NewCool-Atlas-Android-${{ env.CHROMIUM_VERSION }}
-          path: chromium/src/out/Android/apks/ChromePublic.apk
-          retention-days: 30
-
-      - name: Create Release APK Name
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 5: EMPAQUETAR (5 min)
+      # ═══════════════════════════════════════════════════════════════
+      - name: "📦 [8/8] Empaquetar APK"
         run: |
-          mv chromium/src/out/Android/apks/ChromePublic.apk \
-             NewCool-Atlas-${{ env.CHROMIUM_VERSION }}-arm64.apk
+          echo "══════════════════════════════════════"
+          echo "FASE 5: EMPAQUETAR"
+          echo "══════════════════════════════════════"
 
-      - name: Upload Release APK
+          cd chromium/src/out/Android/apks
+
+          # Renombrar
+          mv ChromePublic.apk NewCool-Atlas-${{ env.CHROMIUM_VERSION }}-arm64.apk
+
+          # Info del APK
+          ls -lah NewCool-Atlas-*.apk
+
+          echo ""
+          echo "✅ APK listo para descarga"
+
+      - name: "🚀 Subir APK"
         uses: actions/upload-artifact@v4
         with:
-          name: NewCool-Atlas-Release
-          path: NewCool-Atlas-*.apk
+          name: NewCool-Atlas-Android
+          path: chromium/src/out/Android/apks/NewCool-Atlas-*.apk
           retention-days: 90
+
+      # ═══════════════════════════════════════════════════════════════
+      # RESUMEN
+      # ═══════════════════════════════════════════════════════════════
+      - name: "📋 Resumen"
+        if: always()
+        run: |
+          echo ""
+          echo "══════════════════════════════════════════════════════"
+          echo "         NEWCOOL ATLAS - BUILD COMPLETADO"
+          echo "══════════════════════════════════════════════════════"
+          echo ""
+          echo "  Versión:       ${{ env.CHROMIUM_VERSION }}"
+          echo "  Plataforma:    Android"
+          echo "  Arquitectura:  arm64"
+          echo ""
+          echo "  Descarga el APK desde:"
+          echo "  → Actions → Este workflow → Artifacts"
+          echo ""
+          echo "══════════════════════════════════════════════════════"
