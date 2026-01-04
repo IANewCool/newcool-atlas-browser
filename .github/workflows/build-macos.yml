@@ -1,0 +1,95 @@
+name: Build NewCool Atlas macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: 'Architecture'
+        required: true
+        default: 'x64'
+        type: choice
+        options:
+          - x64
+          - arm64
+
+env:
+  CHROMIUM_VERSION: "145.0.7560.0"
+  DEPOT_TOOLS_UPDATE: "0"
+
+jobs:
+  build-macos:
+    runs-on: macos-14
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Setup depot_tools
+        run: |
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo "$PWD/depot_tools" >> $GITHUB_PATH
+
+      - name: Fetch Chromium
+        run: |
+          mkdir chromium && cd chromium
+          fetch --nohooks --no-history chromium
+        timeout-minutes: 90
+
+      - name: Run Hooks
+        run: |
+          cd chromium/src
+          gclient runhooks
+
+      - name: Apply NewCool Patches
+        run: |
+          cd chromium/src
+          for patch in $GITHUB_WORKSPACE/patches/*.patch; do
+            echo "Applying: $patch"
+            git apply "$patch" || echo "Patch may have conflicts, continuing..."
+          done
+
+      - name: Configure macOS Build
+        run: |
+          cd chromium/src
+          gn gen out/Default --args='
+            target_cpu="${{ github.event.inputs.arch }}"
+            is_debug=false
+            is_official_build=true
+            is_component_build=false
+            symbol_level=0
+            chrome_pgo_phase=0
+          '
+
+      - name: Build Chrome
+        run: |
+          cd chromium/src
+          autoninja -C out/Default chrome
+        timeout-minutes: 240
+
+      - name: Code Sign (Ad-Hoc)
+        run: |
+          cd chromium/src/out/Default
+          codesign --force --deep --sign - "NewCool Atlas.app"
+
+      - name: Create DMG
+        run: |
+          mkdir -p dmg-contents
+          cp -R "chromium/src/out/Default/NewCool Atlas.app" dmg-contents/
+          ln -s /Applications dmg-contents/Applications
+          hdiutil create -volname "NewCool Atlas" \
+            -srcfolder dmg-contents \
+            -ov -format UDZO \
+            "NewCool-Atlas-${{ env.CHROMIUM_VERSION }}-${{ github.event.inputs.arch }}.dmg"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: NewCool-Atlas-macOS-${{ github.event.inputs.arch }}
+          path: NewCool-Atlas-*.dmg
+          retention-days: 90

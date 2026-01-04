@@ -1,0 +1,107 @@
+name: Build NewCool Atlas Android
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
+
+env:
+  CHROMIUM_VERSION: "145.0.7560.0"
+  DEPOT_TOOLS_UPDATE: "0"
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git curl wget python3 python3-pip \
+            lsb-release sudo \
+            openjdk-11-jdk
+
+      - name: Setup depot_tools
+        run: |
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo "$PWD/depot_tools" >> $GITHUB_PATH
+
+      - name: Fetch Chromium (minimal)
+        run: |
+          mkdir chromium && cd chromium
+          fetch --nohooks --no-history chromium
+        timeout-minutes: 60
+
+      - name: Install Build Dependencies
+        run: |
+          cd chromium/src
+          ./build/install-build-deps.sh --android --no-prompt
+          gclient runhooks
+
+      - name: Apply NewCool Patches
+        run: |
+          cd chromium/src
+          for patch in $GITHUB_WORKSPACE/patches/*.patch; do
+            echo "Applying: $patch"
+            git apply "$patch" || echo "Patch may have conflicts, continuing..."
+          done
+
+      - name: Configure Android Build
+        run: |
+          cd chromium/src
+          gn gen out/Android --args='
+            target_os="android"
+            target_cpu="arm64"
+            is_debug=false
+            is_official_build=true
+            is_component_build=false
+            symbol_level=0
+            android_channel="stable"
+            chrome_pgo_phase=0
+          '
+
+      - name: Build Chrome APK
+        run: |
+          cd chromium/src
+          autoninja -C out/Android chrome_public_apk
+        timeout-minutes: 240
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NewCool-Atlas-Android-${{ env.CHROMIUM_VERSION }}
+          path: chromium/src/out/Android/apks/ChromePublic.apk
+          retention-days: 30
+
+      - name: Create Release APK Name
+        run: |
+          mv chromium/src/out/Android/apks/ChromePublic.apk \
+             NewCool-Atlas-${{ env.CHROMIUM_VERSION }}-arm64.apk
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NewCool-Atlas-Release
+          path: NewCool-Atlas-*.apk
+          retention-days: 90

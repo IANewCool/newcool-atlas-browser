@@ -1,0 +1,35 @@
+From d2f84d952e80a5ddf69a1d57291059b054f4f119 Mon Sep 17 00:00:00 2001
+From: IANewCool <newcoolia@gmail.com>
+Date: Mon, 29 Dec 2025 19:21:32 -0300
+Subject: [PATCH 2/3] fix: Update NewTab page URL from city.newcool.io to
+ planet.newcool.io
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Updates the hardcoded NewTab page location override in profile_impl.cc
+to use planet.newcool.io, matching the homepage configuration.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+---
+ chrome/browser/profiles/profile_impl.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/chrome/browser/profiles/profile_impl.cc b/chrome/browser/profiles/profile_impl.cc
+index f1d10f03bc6f5..91708c77d454d 100644
+--- a/chrome/browser/profiles/profile_impl.cc
++++ b/chrome/browser/profiles/profile_impl.cc
+@@ -398,7 +398,7 @@ void ProfileImpl::RegisterProfilePrefs(
+   registry->RegisterStringPref(prefs::kHomePage, std::string(),
+                                home_page_flags);
+   registry->RegisterStringPref(prefs::kNewTabPageLocationOverride,
+-                               std::string());
++                               "https://planet.newcool.io");
+ 
+ #if BUILDFLAG(ENABLE_PRINTING)
+   registry->RegisterBooleanPref(prefs::kPrintingEnabled, true);
+-- 
+2.50.1 (Apple Git-155)
+
