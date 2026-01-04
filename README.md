@@ -1,6 +1,12 @@
-# NewCool Atlas Browser
+<p align="center">
+  <img src="https://avatars.githubusercontent.com/u/126275955?v=4" width="120" alt="NewCool Planet">
+</p>
 
-Navegador web basado en Chromium, optimizado para el ecosistema educativo NewCool.
+<h1 align="center">NewCool Atlas Browser</h1>
+
+<p align="center">
+  Navegador web basado en Chromium, optimizado para el ecosistema educativo NewCool.
+</p>
 
 ## Características
 
