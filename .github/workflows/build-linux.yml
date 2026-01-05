@@ -1,0 +1,200 @@
+name: Build NewCool Atlas Linux
+
+on:
+  workflow_dispatch:
+
+env:
+  CHROMIUM_VERSION: "145.0.7560.0"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 1: PREPARACIÓN
+      # ═══════════════════════════════════════════════════════════════
+      - name: "📥 Checkout patches"
+        uses: actions/checkout@v4
+
+      - name: "📊 [1/7] Espacio inicial"
+        run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 1: PREPARACIÓN"
+          echo "══════════════════════════════════════"
+          df -h /
+          nproc
+          free -h
+
+      - name: "🧹 [2/7] Liberar espacio en disco"
+        run: |
+          echo "Eliminando paquetes innecesarios..."
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/share/swift
+          sudo docker image prune --all --force 2>/dev/null || true
+          sudo apt-get clean
+          echo "Espacio después de limpieza:"
+          df -h /
+
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 2: OBTENER CHROMIUM
+      # ═══════════════════════════════════════════════════════════════
+      - name: "📥 [3/7] Instalar depot_tools"
+        run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 2: OBTENER CHROMIUM"
+          echo "══════════════════════════════════════"
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo "$PWD/depot_tools" >> $GITHUB_PATH
+
+      - name: "📥 [4/7] Descargar Chromium"
+        run: |
+          mkdir chromium && cd chromium
+          
+          cat > .gclient << 'GCLIENT'
+          solutions = [{
+            "name": "src",
+            "url": "https://chromium.googlesource.com/chromium/src.git@${{ env.CHROMIUM_VERSION }}",
+            "managed": False,
+            "custom_vars": {},
+          }]
+          target_os = ["linux"]
+          GCLIENT
+          
+          echo "Iniciando descarga..."
+          gclient sync --no-history --nohooks -j4 2>&1 | tail -20
+          
+          echo "✅ Descarga completada"
+          df -h /
+        timeout-minutes: 60
+
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 3: CONFIGURAR BUILD
+      # ═══════════════════════════════════════════════════════════════
+      - name: "🔧 [5/7] Instalar dependencias"
+        run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 3: CONFIGURAR BUILD"
+          echo "══════════════════════════════════════"
+          cd chromium/src
+          
+          sudo ./build/install-build-deps.sh --no-prompt 2>&1 | tail -20 || true
+          gclient runhooks 2>&1 | tail -10
+          
+          echo "✅ Dependencias instaladas"
+
+      - name: "📝 [6/7] Aplicar patches NewCool"
+        run: |
+          cd chromium/src
+          
+          echo "Aplicando patches..."
+          for patch in $GITHUB_WORKSPACE/patches/*.patch; do
+            name=$(basename "$patch")
+            echo "→ $name"
+            if git apply --check "$patch" 2>/dev/null; then
+              git apply "$patch"
+              echo "  ✅ Aplicado"
+            else
+              echo "  ⚠️ Aplicando con merge..."
+              git apply --3way "$patch" 2>/dev/null || echo "  ❌ Falló: $name"
+            fi
+          done
+          
+          echo ""
+          echo "Verificando branding:"
+          head -5 chrome/app/theme/chromium/BRANDING
+
+      - name: "⚙️ Configurar GN"
+        run: |
+          cd chromium/src
+          
+          gn gen out/Linux --args='
+            target_os="linux"
+            target_cpu="x64"
+            is_debug=false
+            is_official_build=false
+            is_component_build=false
+            symbol_level=0
+            enable_nacl=false
+            blink_symbol_level=0
+            v8_symbol_level=0
+            chrome_pgo_phase=0
+          '
+          
+          echo "✅ Build configurado"
+          df -h /
+
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 4: COMPILAR
+      # ═══════════════════════════════════════════════════════════════
+      - name: "🔨 [7/7] Compilar"
+        run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 4: COMPILAR"
+          echo "══════════════════════════════════════"
+          cd chromium/src
+          
+          autoninja -C out/Linux chrome 2>&1 | while read line; do
+            if echo "$line" | grep -qE '^\[[0-9]+/[0-9]+\]'; then
+              current=$(echo "$line" | sed 's/\[\([0-9]*\).*/\1/')
+              if [ $((current % 2000)) -eq 0 ]; then
+                echo "$line"
+              fi
+            fi
+          done
+          
+          echo "✅ Compilación completada"
+          ls -lah out/Linux/chrome
+        timeout-minutes: 240
+
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 5: EMPAQUETAR
+      # ═══════════════════════════════════════════════════════════════
+      - name: "📦 Empaquetar"
+        run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 5: EMPAQUETAR"
+          echo "══════════════════════════════════════"
+          cd chromium/src/out/Linux
+          
+          mkdir -p NewCool-Atlas-Linux
+          cp chrome NewCool-Atlas-Linux/newcool-atlas
+          cp *.so NewCool-Atlas-Linux/ 2>/dev/null || true
+          cp *.pak NewCool-Atlas-Linux/ 2>/dev/null || true
+          cp *.bin NewCool-Atlas-Linux/ 2>/dev/null || true
+          cp icudtl.dat NewCool-Atlas-Linux/ 2>/dev/null || true
+          cp -r locales NewCool-Atlas-Linux/ 2>/dev/null || true
+          
+          tar -czvf NewCool-Atlas-${{ env.CHROMIUM_VERSION }}-linux-x64.tar.gz NewCool-Atlas-Linux
+          
+          echo "✅ Empaquetado completado"
+          ls -lah NewCool-Atlas-*.tar.gz
+
+      - name: "🚀 Subir artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: NewCool-Atlas-Linux-x64
+          path: chromium/src/out/Linux/NewCool-Atlas-*.tar.gz
+          retention-days: 90
+
+      # ═══════════════════════════════════════════════════════════════
+      # RESUMEN
+      # ═══════════════════════════════════════════════════════════════
+      - name: "📋 Resumen"
+        if: always()
+        run: |
+          echo ""
+          echo "══════════════════════════════════════════════════════"
+          echo "         NEWCOOL ATLAS - BUILD LINUX"
+          echo "══════════════════════════════════════════════════════"
+          echo ""
+          echo "  Versión:       ${{ env.CHROMIUM_VERSION }}"
+          echo "  Plataforma:    Linux"
+          echo "  Arquitectura:  x64"
+          echo ""
+          echo "══════════════════════════════════════════════════════"
