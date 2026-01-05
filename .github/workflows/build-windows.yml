@@ -1,0 +1,175 @@
+name: Build NewCool Atlas Windows
+
+on:
+  workflow_dispatch:
+
+env:
+  CHROMIUM_VERSION: "145.0.7560.0"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 1: PREPARACIÓN
+      # ═══════════════════════════════════════════════════════════════
+      - name: "📥 Checkout patches"
+        uses: actions/checkout@v4
+
+      - name: "📊 [1/7] Info del sistema"
+        run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 1: PREPARACIÓN"
+          echo "══════════════════════════════════════"
+          Get-WmiObject Win32_OperatingSystem | Select-Object Caption, Version
+          Get-WmiObject Win32_Processor | Select-Object Name, NumberOfCores
+          Get-PSDrive C | Select-Object Used, Free
+
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 2: OBTENER CHROMIUM
+      # ═══════════════════════════════════════════════════════════════
+      - name: "📥 [2/7] Instalar depot_tools"
+        run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 2: OBTENER CHROMIUM"
+          echo "══════════════════════════════════════"
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git C:\depot_tools
+          echo "C:\depot_tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: "📥 [3/7] Descargar Chromium"
+        run: |
+          $env:PATH = "C:\depot_tools;$env:PATH"
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+          
+          mkdir chromium
+          cd chromium
+          
+          # Configuración para Windows
+          @"
+          solutions = [{
+              "name": "src",
+              "url": "https://chromium.googlesource.com/chromium/src.git@${{ env.CHROMIUM_VERSION }}",
+              "managed": False,
+              "custom_vars": {
+                  "checkout_win": True,
+              },
+          }]
+          target_os = ["win"]
+          "@ | Out-File -FilePath .gclient -Encoding utf8
+          
+          echo "Iniciando descarga..."
+          gclient sync --no-history --nohooks -j4
+          
+          echo "✅ Descarga completada"
+        timeout-minutes: 90
+
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 3: CONFIGURAR BUILD
+      # ═══════════════════════════════════════════════════════════════
+      - name: "🔧 [4/7] Ejecutar hooks"
+        run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 3: CONFIGURAR BUILD"
+          echo "══════════════════════════════════════"
+          $env:PATH = "C:\depot_tools;$env:PATH"
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+          cd chromium\src
+          gclient runhooks
+
+      - name: "📝 [5/7] Aplicar patches NewCool"
+        run: |
+          cd chromium\src
+          
+          echo "Aplicando patches..."
+          Get-ChildItem $env:GITHUB_WORKSPACE\patches\*.patch | ForEach-Object {
+              echo "→ $($_.Name)"
+              git apply $_.FullName 2>$null
+              if ($LASTEXITCODE -ne 0) {
+                  echo "  ⚠️ Aplicando con merge..."
+                  git apply --3way $_.FullName 2>$null
+              }
+          }
+          
+          echo ""
+          echo "Verificando branding:"
+          Get-Content chrome\app\theme\chromium\BRANDING | Select-Object -First 5
+
+      - name: "⚙️ [6/7] Configurar GN"
+        run: |
+          $env:PATH = "C:\depot_tools;$env:PATH"
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+          cd chromium\src
+          
+          gn gen out/Windows --args='target_os="win" target_cpu="x64" is_debug=false is_official_build=false is_component_build=false symbol_level=0 enable_nacl=false blink_symbol_level=0 v8_symbol_level=0 chrome_pgo_phase=0'
+          
+          echo "✅ Build configurado"
+
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 4: COMPILAR
+      # ═══════════════════════════════════════════════════════════════
+      - name: "🔨 [7/7] Compilar EXE"
+        run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 4: COMPILAR"
+          echo "══════════════════════════════════════"
+          $env:PATH = "C:\depot_tools;$env:PATH"
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+          cd chromium\src
+          
+          echo "Compilando... esto puede tomar 2-4 horas"
+          autoninja -C out/Windows chrome
+          
+          echo "✅ Compilación completada"
+          Get-ChildItem out\Windows\chrome.exe
+        timeout-minutes: 240
+
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 5: EMPAQUETAR
+      # ═══════════════════════════════════════════════════════════════
+      - name: "📦 Empaquetar"
+        run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 5: EMPAQUETAR"
+          echo "══════════════════════════════════════"
+          cd chromium\src\out\Windows
+          
+          # Crear carpeta de distribución
+          mkdir NewCool-Atlas-Windows
+          Copy-Item chrome.exe NewCool-Atlas-Windows\
+          Copy-Item *.dll NewCool-Atlas-Windows\ -ErrorAction SilentlyContinue
+          Copy-Item *.pak NewCool-Atlas-Windows\ -ErrorAction SilentlyContinue
+          Copy-Item *.bin NewCool-Atlas-Windows\ -ErrorAction SilentlyContinue
+          Copy-Item icudtl.dat NewCool-Atlas-Windows\ -ErrorAction SilentlyContinue
+          Copy-Item -Recurse locales NewCool-Atlas-Windows\ -ErrorAction SilentlyContinue
+          
+          # Comprimir
+          Compress-Archive -Path NewCool-Atlas-Windows -DestinationPath NewCool-Atlas-${{ env.CHROMIUM_VERSION }}-win64.zip
+          
+          echo "✅ Empaquetado completado"
+          Get-ChildItem NewCool-Atlas-*.zip
+
+      - name: "🚀 Subir artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: NewCool-Atlas-Windows-x64
+          path: chromium/src/out/Windows/NewCool-Atlas-*.zip
+          retention-days: 90
+
+      # ═══════════════════════════════════════════════════════════════
+      # RESUMEN
+      # ═══════════════════════════════════════════════════════════════
+      - name: "📋 Resumen"
+        if: always()
+        run: |
+          echo ""
+          echo "══════════════════════════════════════════════════════"
+          echo "         NEWCOOL ATLAS - BUILD WINDOWS"
+          echo "══════════════════════════════════════════════════════"
+          echo ""
+          echo "  Versión:       ${{ env.CHROMIUM_VERSION }}"
+          echo "  Plataforma:    Windows"
+          echo "  Arquitectura:  x64"
+          echo ""
+          echo "══════════════════════════════════════════════════════"
