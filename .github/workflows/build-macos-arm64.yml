@@ -1,0 +1,191 @@
+name: Build NewCool Atlas macOS (ARM64)
+
+on:
+  workflow_dispatch:
+
+env:
+  CHROMIUM_VERSION: "145.0.7560.0"
+
+jobs:
+  build:
+    runs-on: macos-14  # Apple Silicon M1
+    timeout-minutes: 360
+
+    steps:
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 1: PREPARACIÓN
+      # ═══════════════════════════════════════════════════════════════
+      - name: "📥 Checkout patches"
+        uses: actions/checkout@v4
+
+      - name: "📊 [1/7] Info del sistema"
+        run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 1: PREPARACIÓN"
+          echo "══════════════════════════════════════"
+          uname -m
+          sysctl -n machdep.cpu.brand_string
+          sw_vers
+          df -h /
+
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 2: OBTENER CHROMIUM
+      # ═══════════════════════════════════════════════════════════════
+      - name: "📥 [2/7] Instalar depot_tools"
+        run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 2: OBTENER CHROMIUM"
+          echo "══════════════════════════════════════"
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo "$PWD/depot_tools" >> $GITHUB_PATH
+
+      - name: "📥 [3/7] Descargar Chromium"
+        run: |
+          mkdir chromium && cd chromium
+          
+          cat > .gclient << 'GCLIENT'
+          solutions = [{
+            "name": "src",
+            "url": "https://chromium.googlesource.com/chromium/src.git@${{ env.CHROMIUM_VERSION }}",
+            "managed": False,
+            "custom_vars": {},
+          }]
+          target_os = ["mac"]
+          GCLIENT
+          
+          echo "Iniciando descarga..."
+          gclient sync --no-history --nohooks -j4 2>&1 | tail -20
+          
+          echo "✅ Descarga completada"
+          df -h /
+        timeout-minutes: 60
+
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 3: CONFIGURAR BUILD
+      # ═══════════════════════════════════════════════════════════════
+      - name: "🔧 [4/7] Ejecutar hooks"
+        run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 3: CONFIGURAR BUILD"
+          echo "══════════════════════════════════════"
+          cd chromium/src
+          gclient runhooks 2>&1 | tail -10
+          echo "✅ Hooks completados"
+
+      - name: "📝 [5/7] Aplicar patches NewCool"
+        run: |
+          cd chromium/src
+          
+          echo "Aplicando patches..."
+          for patch in $GITHUB_WORKSPACE/patches/*.patch; do
+            name=$(basename "$patch")
+            echo "→ $name"
+            if git apply --check "$patch" 2>/dev/null; then
+              git apply "$patch"
+              echo "  ✅ Aplicado"
+            else
+              echo "  ⚠️ Aplicando con merge..."
+              git apply --3way "$patch" 2>/dev/null || echo "  ❌ Falló: $name"
+            fi
+          done
+          
+          echo ""
+          echo "Verificando branding:"
+          head -5 chrome/app/theme/chromium/BRANDING
+
+      - name: "⚙️ [6/7] Configurar GN (ARM64)"
+        run: |
+          cd chromium/src
+          
+          gn gen out/arm64 --args='
+            target_os="mac"
+            target_cpu="arm64"
+            is_debug=false
+            is_official_build=false
+            is_component_build=false
+            symbol_level=0
+            enable_nacl=false
+            blink_symbol_level=0
+            v8_symbol_level=0
+            chrome_pgo_phase=0
+          '
+          
+          echo "✅ Build ARM64 configurado"
+
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 4: COMPILAR
+      # ═══════════════════════════════════════════════════════════════
+      - name: "🔨 [7/7] Compilar"
+        run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 4: COMPILAR"
+          echo "══════════════════════════════════════"
+          cd chromium/src
+          
+          autoninja -C out/arm64 chrome 2>&1 | while read line; do
+            if echo "$line" | grep -qE '^\[[0-9]+/[0-9]+\]'; then
+              current=$(echo "$line" | sed 's/\[\([0-9]*\).*/\1/')
+              if [ $((current % 2000)) -eq 0 ]; then
+                echo "$line"
+              fi
+            fi
+          done
+          
+          echo "✅ Compilación completada"
+          ls -lah "out/arm64/NewCool Atlas.app" || ls -lah out/arm64/Chromium.app
+        timeout-minutes: 240
+
+      # ═══════════════════════════════════════════════════════════════
+      # FASE 5: EMPAQUETAR
+      # ═══════════════════════════════════════════════════════════════
+      - name: "📦 Empaquetar DMG"
+        run: |
+          echo "══════════════════════════════════════"
+          echo "FASE 5: EMPAQUETAR"
+          echo "══════════════════════════════════════"
+          cd chromium/src/out/arm64
+          
+          # Firmar ad-hoc
+          APP_NAME="NewCool Atlas.app"
+          if [ ! -d "$APP_NAME" ]; then
+            APP_NAME="Chromium.app"
+          fi
+          
+          codesign --force --deep --sign - "$APP_NAME" || true
+          
+          # Crear DMG
+          mkdir -p dmg-contents
+          cp -R "$APP_NAME" dmg-contents/
+          ln -s /Applications dmg-contents/Applications
+          
+          hdiutil create -volname "NewCool Atlas" \
+            -srcfolder dmg-contents \
+            -ov -format UDZO \
+            "NewCool-Atlas-${{ env.CHROMIUM_VERSION }}-arm64.dmg"
+          
+          echo "✅ DMG creado"
+          ls -lah NewCool-Atlas-*.dmg
+
+      - name: "🚀 Subir DMG"
+        uses: actions/upload-artifact@v4
+        with:
+          name: NewCool-Atlas-macOS-ARM64
+          path: chromium/src/out/arm64/NewCool-Atlas-*.dmg
+          retention-days: 90
+
+      # ═══════════════════════════════════════════════════════════════
+      # RESUMEN
+      # ═══════════════════════════════════════════════════════════════
+      - name: "📋 Resumen"
+        if: always()
+        run: |
+          echo ""
+          echo "══════════════════════════════════════════════════════"
+          echo "         NEWCOOL ATLAS - BUILD macOS ARM64"
+          echo "══════════════════════════════════════════════════════"
+          echo ""
+          echo "  Versión:       ${{ env.CHROMIUM_VERSION }}"
+          echo "  Plataforma:    macOS"
+          echo "  Arquitectura:  ARM64 (Apple Silicon)"
+          echo ""
+          echo "══════════════════════════════════════════════════════"
