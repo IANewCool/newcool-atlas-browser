@@ -42,7 +42,7 @@ jobs:
       - name: "📥 [3/7] Descargar Chromium"
         run: |
           mkdir chromium && cd chromium
-          
+
           cat > .gclient << 'GCLIENT'
           solutions = [{
             "name": "src",
@@ -52,13 +52,22 @@ jobs:
           }]
           target_os = ["mac"]
           GCLIENT
-          
-          echo "Iniciando descarga..."
-          gclient sync --no-history --nohooks -j4 2>&1 | tail -20
-          
+
+          echo "Iniciando descarga (esto toma 20-40 min)..."
+          gclient sync --no-history --nohooks -j4
+
+          # Verificar que src existe y tiene contenido
+          if [ ! -d "src/chrome" ]; then
+            echo "❌ Error: Chromium no se descargó correctamente"
+            ls -la src/ 2>/dev/null || echo "src/ no existe"
+            exit 1
+          fi
+
           echo "✅ Descarga completada"
+          echo "Archivos en src/chrome:"
+          ls src/chrome/ | head -10
           df -h /
-        timeout-minutes: 60
+        timeout-minutes: 90
 
       # ═══════════════════════════════════════════════════════════════
       # FASE 3: CONFIGURAR BUILD
