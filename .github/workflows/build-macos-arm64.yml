@@ -117,22 +117,33 @@ jobs:
       # ═══════════════════════════════════════════════════════════════
       - name: "🔨 [7/7] Compilar"
         run: |
+          set -o pipefail
           echo "══════════════════════════════════════"
           echo "FASE 4: COMPILAR"
           echo "══════════════════════════════════════"
           cd chromium/src
-          
-          autoninja -C out/arm64 chrome 2>&1 | while read line; do
+
+          # Ejecutar autoninja con log completo y mostrar progreso
+          autoninja -C out/arm64 chrome 2>&1 | tee /tmp/build.log | while read line; do
             if echo "$line" | grep -qE '^\[[0-9]+/[0-9]+\]'; then
               current=$(echo "$line" | sed 's/\[\([0-9]*\).*/\1/')
               if [ $((current % 2000)) -eq 0 ]; then
                 echo "$line"
               fi
+            elif echo "$line" | grep -qiE 'error|failed|fatal'; then
+              echo "$line"
             fi
           done
-          
+
+          # Verificar si hay errores en el log
+          if grep -qiE 'error:|FAILED:|fatal error' /tmp/build.log; then
+            echo "❌ Errores encontrados:"
+            grep -iE 'error:|FAILED:|fatal error' /tmp/build.log | tail -20
+            exit 1
+          fi
+
           echo "✅ Compilación completada"
-          ls -lah "out/arm64/NewCool Atlas.app" || ls -lah out/arm64/Chromium.app
+          ls -lah "out/arm64/NewCool Atlas.app" 2>/dev/null || ls -lah out/arm64/Chromium.app
         timeout-minutes: 240
 
       # ═══════════════════════════════════════════════════════════════
