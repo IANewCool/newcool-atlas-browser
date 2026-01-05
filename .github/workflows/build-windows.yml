@@ -18,6 +18,11 @@ jobs:
       - name: "📥 Checkout patches"
         uses: actions/checkout@v4
 
+      - name: "🔧 Habilitar rutas largas"
+        run: |
+          git config --system core.longpaths true
+          git config --global core.longpaths true
+
       - name: "📊 [1/7] Info del sistema"
         run: |
           echo "══════════════════════════════════════"
