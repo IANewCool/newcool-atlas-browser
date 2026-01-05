@@ -54,7 +54,8 @@ jobs:
           GCLIENT
 
           echo "Iniciando descarga (esto toma 20-40 min)..."
-          gclient sync --no-history --nohooks -j4
+          # Usar --shallow en lugar de --no-history para descargar todo lo necesario
+          gclient sync --shallow --nohooks -j4
 
           # Verificar que src existe y tiene contenido
           if [ ! -d "src/chrome" ]; then
