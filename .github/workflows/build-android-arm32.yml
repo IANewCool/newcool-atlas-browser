@@ -153,7 +153,7 @@ jobs:
 
           echo "✅ Compilación completada"
           ls -lah out/Android-arm32/apks/
-        timeout-minutes: 240
+        timeout-minutes: 350
 
       # ═══════════════════════════════════════════════════════════════
       # FASE 5: EMPAQUETAR

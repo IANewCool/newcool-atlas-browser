@@ -154,7 +154,7 @@ jobs:
 
           echo "✅ Compilación completada"
           ls -lah "out/arm64/NewCool Atlas.app" 2>/dev/null || ls -lah out/arm64/Chromium.app
-        timeout-minutes: 240
+        timeout-minutes: 350
 
       # ═══════════════════════════════════════════════════════════════
       # FASE 5: EMPAQUETAR

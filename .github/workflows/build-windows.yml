@@ -158,7 +158,7 @@ jobs:
           
           echo "✅ Compilación completada"
           Get-ChildItem out\Windows\chrome.exe
-        timeout-minutes: 240
+        timeout-minutes: 350
 
       # ═══════════════════════════════════════════════════════════════
       # FASE 5: EMPAQUETAR
